@@ -3,18 +3,20 @@ package src
 import (
 	"github.com/sirupsen/logrus"
 	"net/http"
-	"net/url"
 	"time"
 )
 
 type RequestLog struct {
-	URL             *url.URL      `json:"url"`
+	URL             string        `json:"url"`
 	RequestHeaders  http.Header   `json:"requestHeaders"`
 	ResponseHeaders http.Header   `json:"responseHeaders"`
 	CreateTime      time.Time     `json:"createTime"`
 	TotalTime       time.Duration `json:"totalTime"`
+	RequestBody     string        `json:"requestBody"`
 	ResponseBody    string        `json:"responseBody"`
 	Method          string        `json:"method"`
+	Status          int           `json:"status"`
+	Injected        bool          `json:"injected"`
 }
 
 func (r *RequestLog) Println() {

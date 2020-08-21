@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <!-- Required meta tags -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+    <link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/element-ui/2.13.2/theme-chalk/index.css">
+    <title>X-Man Console</title>
+</head>
+<body>
+<style>
+    * {
+        margin: 0;
+        padding: 0;
+    }
+
+    html, body {
+        height: 100%;
+        overflow: hidden;
+    }
+
+    #app {
+        height: 100%;
+    }
+
+    #app > .el-container {
+        height: 100%;
+    }
+
+    .el-header, .el-footer {
+        background-color: #B3C0D1;
+        color: #333;
+        text-align: center;
+        line-height: 60px;
+    }
+
+    .el-aside {
+        background-color: #D3DCE6;
+        color: #333;
+        text-align: center;
+        line-height: 200px;
+        height: 100%;
+    }
+
+    .el-main {
+        background-color: #E9EEF3;
+        color: #333;
+        text-align: center;
+    }
+
+    body > .el-container {
+        margin-bottom: 40px;
+    }
+
+    .el-container:nth-child(5) .el-aside,
+    .el-container:nth-child(6) .el-aside {
+        line-height: 260px;
+    }
+
+    .el-container:nth-child(7) .el-aside {
+        line-height: 320px;
+    }
+
+    .filter {
+        text-align: left;
+    }
+
+    .el-table .warning-row {
+        background: oldlace;
+    }
+
+    .el-table .success-row {
+        background: #f0f9eb;
+    }
+
+    .el-table .inject {
+        background: gold;
+    }
+</style>
+<div id="app">
+    <el-container>
+        <el-aside width="200px">X-Man</el-aside>
+        <el-container>
+            <el-main>
+                <el-container>
+                    <el-form :inline="true" :model="filter" class="filter">
+                        <el-form-item label="url过滤">
+                            <el-input @input="filterUrl" v-model="filter.url" placeholder="url过滤正则表达式"></el-input>
+                        </el-form-item>
+                        <el-form-item label="方法过滤">
+                            <el-input @input="filterMethod" v-model="filter.method" placeholder="方法过滤"></el-input>
+                        </el-form-item>
+                        <el-button @click="totalRaw=[];renderRaw=[];">清除记录</el-button>
+                        <el-button @click="injectGlobal">脚本注入</el-button>
+                    </el-form>
+                </el-container>
+                <el-table
+                        :data="renderRaw"
+                        style="width: 100%"
+                        border
+                        @row-click="openDetail"
+                        :row-class-name="tableRowClassName">
+                    <el-table-column
+                            prop="createTime"
+                            label="时间"
+                    >
+                    </el-table-column>
+                    <el-table-column
+                            prop="method"
+                            label="Method"
+                    >
+                    </el-table-column>
+                    <el-table-column
+                            prop="url"
+                            label="地址"
+                    >
+                    </el-table-column>
+                    <el-table-column
+                            prop="status"
+                            label="状态">
+                    </el-table-column>
+
+                    <el-table-column
+                            prop="contentType"
+                            label="响应类型">
+                    </el-table-column>
+                    <el-table-column
+                            prop="totalTime"
+                            label="耗时">
+                    </el-table-column>
+                    <el-table-column
+                            fixed="right"
+                            label="操作">
+                        <template slot-scope="scope">
+                            <el-button @click.stop @click="injectScript(scope.row)" type="text" size="small">脚本注入
+                            </el-button>
+                            <el-button @click.stop @click="reRequest(scope.row)" type="text" size="small">请求重放
+                            </el-button>
+                            <el-button @click="exportJSON(scope.row)" type="text" size="small">导出</el-button>
+                        </template>
+                    </el-table-column>
+                </el-table>
+
+                <el-drawer
+                        title="请求详情"
+                        :visible.sync="drawer"
+                        :direction="direction"
+                        :modal="false"
+                        style="text-align: left"
+                >
+                    <el-tabs type="border-card">
+                        <el-tab-pane label="requestHeaders">
+                            <div v-if="selectedRequest != null">
+                                <p v-for="(val,key) in selectedRequest.request.requestHeaders">
+                                    ${key}: ${ headerValue(val) }
+                                </p>
+                            </div>
+                        </el-tab-pane>
+                        <el-tab-pane label="responseHeaders">
+                            <div v-if="selectedRequest != null">
+                                <p v-for="(val,key) in selectedRequest.request.responseHeaders">
+                                    ${key}: ${ headerValue(val) }
+                                </p>
+                            </div>
+                        </el-tab-pane>
+                        <el-tab-pane label="textView">
+                            <div v-if="selectedRequest != null">
+                                ${selectedRequest.request.responseBody}
+                            </div>
+                        </el-tab-pane>
+                    </el-tabs>
+                </el-drawer>
+
+                <!--脚本注入对话框 -->
+                <el-dialog
+                        title="请输入javascript脚本"
+                        :visible.sync="scriptDialogVisible"
+                        width="40%"
+                        style="text-align: left"
+                        :before-close="closeScriptDialog">
+                    <el-form :inline="true" :model="filter" class="filter">
+                        <el-checkbox v-model="injectIgnoreQuery">忽略query</el-checkbox>
+                        <el-checkbox v-model="rememberInject">记住(否则值会注入一次)</el-checkbox>
+                        <div v-if="injectGlobal">
+                            <el-form-item label="注入请求方法(大写):如 GET">
+                                <el-input
+                                        v-if="injectGlobal"
+                                        type="text"
+                                        placeholder="注入请求方法(大写):如 GET"
+                                        v-model="injectGlobalMethod">
+                                </el-input>
+                            </el-form-item>
+                            <el-form-item label="请输入地址">
+                                <el-input
+                                        v-if="injectGlobal"
+                                        type="text"
+                                        placeholder="请输入地址"
+                                        v-model="injectGlobalURL">
+                                </el-input>
+                            </el-form-item>
+                        </div>
+                        <el-input
+                                type="textarea"
+                                :rows="5"
+                                placeholder="请输入脚本"
+                                v-model="scriptToBeInject">
+                        </el-input>
+                    </el-form>
+                    <span slot="footer" class="dialog-footer">
+                        <el-button @click="scriptDialogVisible = false">取 消</el-button>
+                        <el-button type="primary" @click="startInjectScript">确 定</el-button>
+                    </span>
+                </el-dialog>
+                <!-- 结束 脚本注入对话框-->
+
+            </el-main>
+        </el-container>
+    </el-container>
+</div>
+
+<script src="https://cdn.bootcdn.net/ajax/libs/socket.io/2.3.0/socket.io.js"></script>
+<script src="https://cdn.bootcdn.net/ajax/libs/vue/2.6.11/vue.min.js"></script>
+<script src="https://cdn.bootcdn.net/ajax/libs/element-ui/2.13.2/index.js"></script>
+
+<script>
+    (function () {
+        var vm = new Vue({
+            el: "#app",
+            delimiters: ['${', '}'],
+            data: {
+                socket: null,
+                renderRaw: [],
+                totalRaw: [],
+                drawer: false,
+                direction: 'rtl',
+                selectedRequest: null,
+
+                // 注入js字段
+                scriptDialogVisible: false,
+                injectRequest: null,
+                scriptToBeInject: "<script>alert(1);<\/script>",
+                injectIgnoreQuery: false,
+                rememberInject: false,
+                filter: {
+                    url: '',
+                    method: '',
+                },
+                injectGlobalMethod: '',
+                injectGlobalURL: '',
+            },
+            methods: {
+                appendRequest: function (reqLog) {
+                    var raw = {
+                        method: reqLog.method,
+                        url: reqLog.url,
+                        status: reqLog.status,
+                        contentType: reqLog.responseHeaders['Content-Type'],
+                        request: reqLog,
+                        totalTime: reqLog.totalTime / 1000000 + "ms",
+                        createTime: (new Date(reqLog.createTime)).toLocaleTimeString(),
+                    }
+                    this.totalRaw.push(raw);
+                    if (this.canShow(raw)) {
+                        this.renderRaw.push(raw);
+                    }
+                },
+                tableRowClassName: function (row) {
+                    var raw = row.row;
+                    if (raw.request.injected) {
+                        return 'inject';
+                    }
+                    if (raw.status >= 200 && raw.status < 400) {
+                        return "success-row";
+                    } else if (raw.status >= 400 && raw.status < 500) {
+                        return 'warning-row';
+                    } else if (raw.status >= 500) {
+                        return "danger-row";
+                    }
+                    return '';
+                },
+                canShow(val) {
+                    if (this.filter.method !== "") {
+                        var regexp = new RegExp(this.filter.method)
+                        return regexp.test(val.method);
+                    }
+                    if (this.filter.url !== "") {
+                        var regexp = new RegExp(this.filter.url)
+                        return regexp.test(val.url);
+                    }
+                    return true;
+                },
+                filterMethod: function (value) {
+                    if (this.filter.method == "") {
+                        return;
+                    }
+                    var regexp = new RegExp(this.filter.method)
+                    console.log(regexp);
+                    var filterRaw = [];
+                    this.totalRaw.forEach(function (val) {
+                        if (regexp.test(val.method)) {
+                            filterRaw.push(val);
+                        }
+                    });
+                    this.renderRaw = filterRaw;
+                },
+                filterUrl: function () {
+                    if (this.filter.url == "") {
+                        return;
+                    }
+                    var regexp = new RegExp(this.filter.url)
+                    console.log(regexp);
+                    var filterRaw = [];
+                    this.totalRaw.forEach(function (val) {
+                        if (regexp.test(val.url)) {
+                            filterRaw.push(val);
+                        }
+                    });
+                    this.renderRaw = filterRaw;
+                },
+                openDetail(row, col, e) {
+                    this.drawer = true;
+                    this.selectedRequest = row;
+                },
+                headerValue(stringArray) {
+                    return stringArray.join("");
+                },
+                injectGlobal() {
+                    this.scriptDialogVisible = true;
+                    this.injectGlobal = true;
+                },
+                // 脚本注入
+                injectScript(row) {
+                    this.scriptDialogVisible = true;
+                    this.injectRequest = row;
+                    this.injectGlobal = false;
+                },
+                closeScriptDialog() {
+                    this.injectRequest = null;
+                    this.scriptDialogVisible = false;
+                    this.scriptToBeInject = '';
+                    this.injectGlobal = false;
+                },
+                startInjectScript() {
+                    if (this.scriptToBeInject == '') {
+                        this.$message.error('脚本不能为空');
+                        return;
+                    }
+                    if (this.injectGlobal) {
+                        this.socket.emit('inject', {
+                            method: this.injectGlobalMethod,
+                            script: this.scriptToBeInject,
+                            url: this.injectGlobalURL,
+                            options: {
+                                ignoreQuery: this.injectIgnoreQuery,
+                                rememberInject: this.rememberInject,
+                            }
+                        })
+                    } else {
+                        this.socket.emit('inject', {
+                            method: this.injectRequest.method,
+                            script: this.scriptToBeInject,
+                            url: this.injectRequest.url,
+                            options: {
+                                ignoreQuery: this.injectIgnoreQuery,
+                                rememberInject: this.rememberInject,
+                            }
+                        })
+                    }
+                    this.$message.success('注入成功，请重新请求.');
+                    this.closeScriptDialog();
+                },
+                // 请求重放.
+                reRequest(row) {
+                    this.socket.emit('reRequest', {
+                        request: row.request,
+                    })
+                },
+                // 导出json
+                exportJSON(row) {
+
+                },
+            },
+            mounted() {
+                this.socket = io("http://" + window.location.host, {
+                    path: "/-/socket.io",
+                });
+                var that = this;
+                this.socket.on("log", function (data) {
+                    data = JSON.parse(data)
+                    console.log(data);
+                    that.appendRequest(data);
+                })
+            },
+        })
+    })()
+</script>
+</body>
+</html>

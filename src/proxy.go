@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"github.com/andybalholm/brotli"
+	socketio "github.com/googollee/go-socket.io"
 	"github.com/sirupsen/logrus"
 	"io"
 	"io/ioutil"
@@ -15,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -32,13 +34,38 @@ type proxyManager struct {
 	filter      ScriptFilter
 	certManager *certManager
 
-	tr          http.RoundTripper
-	internalApi map[string]handleFunc
+	tr           http.RoundTripper
+	internalApi  map[string]handleFunc
+	socketServer *socketio.Server
+
+	connectionLock sync.RWMutex
+	connections    map[string]socketio.Conn
+	logChan        chan *RequestLog
+
+	injector Injector
 }
 
 func (pm *proxyManager) setup() {
+	pm.socketServer, _ = socketio.NewServer(nil)
+	pm.socketServer.OnConnect("", pm.onConnect)
+	pm.socketServer.OnEvent("", "ping", pm.onPing)
+	pm.socketServer.OnDisconnect("", pm.onDisconnect)
+	pm.socketServer.OnError("", pm.closeConn)
+	pm.socketServer.OnEvent("", "inject", pm.handleInject)
+
+	pm.logChan = make(chan *RequestLog, 1024)
+	pm.connections = make(map[string]socketio.Conn)
+
 	pm.internalApi = make(map[string]handleFunc)
 	pm.internalApi["/-/cert"] = pm.serveCert
+	pm.internalApi["/-/socket.io"] = pm.websocketHandler
+	pm.internalApi["/-/socket.io/"] = pm.websocketHandler
+	pm.internalApi["/-/"] = pm.serveIndex
+	pm.internalApi["/favicon.ico"] = pm.serveNull
+
+	pm.injector = newJavascriptInjector()
+
+	go pm.startSocketServer()
 }
 
 func (pm *proxyManager) serveCert(w http.ResponseWriter, r *http.Request) error {
@@ -48,10 +75,18 @@ func (pm *proxyManager) serveCert(w http.ResponseWriter, r *http.Request) error 
 	return err
 }
 
+func (pm *proxyManager) isSelf(r *http.Request) bool {
+	// TODO, pass self host:port
+	return false
+}
+
 func (pm *proxyManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	logrus.Infof("%s  %s", r.Method, r.URL.Path)
 	if h, ok := pm.internalApi[r.URL.Path]; ok {
 		pm.serveError(w, r, h)
+		return
+	}
+	if pm.isSelf(r) {
 		return
 	}
 	switch r.Method {
@@ -115,7 +150,9 @@ func (pm *proxyManager) handleHttps(w http.ResponseWriter, r *http.Request) erro
 	request.URL.Host = r.URL.Host
 	request.URL.Scheme = `https`
 
-	return pm.handleRequest(conn, request)
+	err = pm.handleRequest(conn, request)
+	conn.Close()
+	return err
 }
 
 func (pm *proxyManager) handleHttp(w http.ResponseWriter, r *http.Request) error {
@@ -210,7 +247,7 @@ func (pm *proxyManager) handleRequest(conn net.Conn, r *http.Request) error {
 		response *http.Response
 	)
 	reqLog = &RequestLog{
-		URL:            r.URL,
+		URL:            r.URL.String(),
 		RequestHeaders: copyHeader(r.Header),
 		CreateTime:     time.Now(),
 		Method:         r.Method,
@@ -227,17 +264,26 @@ func (pm *proxyManager) handleRequest(conn net.Conn, r *http.Request) error {
 	if isStreamMode {
 		reqLog.ResponseBody = "(too big)"
 	} else {
+		resp, ok, err := pm.injector.Inject(r, resp)
+		if err != nil {
+			return err
+		}
 		data, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
 			return err
 		}
-		reqLog.ResponseBody = string(data)
 		resp.Body = ioutil.NopCloser(bytes.NewBuffer(data))
+		reqLog.ResponseBody = string(data)
+		reqLog.Injected = ok
 	}
+
 	resp.Write(conn)
 	reqLog.TotalTime = time.Now().Sub(reqLog.CreateTime)
+	reqLog.Status = resp.StatusCode
 	reqLog.ResponseHeaders = copyHeader(resp.Header)
 	reqLog.Println()
+
+	pm.logChan <- reqLog
 	return nil
 }
 

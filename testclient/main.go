@@ -8,11 +8,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"time"
 )
 
 var (
 	bigFile    = "http://cdn2.clearcode.cn/ps%E5%91%A8%E4%B8%80.rar"
-	simpleFile = "http://cdn2.clearcode.cn/index.html"
+	//simpleFile = "http://cdn2.clearcode.cn/index.html"
+	simpleFile = "https://www.baidu.com"
 	cli        *http.Client
 )
 
@@ -26,8 +28,11 @@ func init() {
 }
 
 func main() {
-	//testSimpleFile()
-	testBigFile()
+	for {
+		time.Sleep(3 * time.Second)
+		testSimpleFile()
+	}
+	//testBigFile()
 }
 
 // Transfer-Encoding:chunked
