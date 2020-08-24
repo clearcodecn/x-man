@@ -13,9 +13,9 @@ go get github.com/clearcodecn/x-man
 3. start request. you can open ui console `http://127.0.0.1:3344/-/` to see the details.
 
 ### Fetures
-[x] javascript(text) inject
-[x] request replay
-[x] export request/response detail
-[] using custom certificate 
-[] body replace
-[] ui change 
+- [x] javascript(text) inject
+- [x] request replay
+- [x] export request/response detail
+- [ ] using custom certificate 
+- [ ] body replace
+- [ ] ui change 
