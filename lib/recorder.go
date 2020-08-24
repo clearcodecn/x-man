@@ -1,4 +1,4 @@
-package src
+package lib
 
 import (
 	"github.com/sirupsen/logrus"

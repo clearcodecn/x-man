@@ -4,7 +4,7 @@ inject, reproduce, export, etc. of network requests from mobile devices/pcs.
 
 ### Install
 ```
-go get github.com/clearcodecn/xman
+go get github.com/clearcodecn/x-man
 ```
 
 ### Usage: 

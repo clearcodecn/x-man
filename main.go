@@ -1,10 +1,10 @@
 package main
 
 import (
-	"github.com/clearcodecn/xman/src"
+	"github.com/clearcodecn/xman/lib"
 	"os"
 )
 
 func main() {
-	src.Main(os.Args)
+	lib.Main(os.Args)
 }
