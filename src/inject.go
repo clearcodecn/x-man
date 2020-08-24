@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 )
 
@@ -32,7 +33,7 @@ type javascriptInjector struct {
 
 func (j *javascriptInjector) Inject(req *http.Request, response *http.Response) (*http.Response, bool, error) {
 	// 1. try full url.
-	key := fmt.Sprintf("%s%s", req.Method, req.URL.String())
+	key := fmt.Sprintf("%s%s", req.Method, strings.TrimSuffix(req.URL.String(), "/"))
 	j.RLock()
 	iq, ok := j.urls[key]
 	j.RUnlock()
@@ -79,7 +80,7 @@ func (j *javascriptInjector) AddInject(req *InjectRequest) {
 		}
 		u.RawQuery = ""
 		u.Fragment = ""
-		req.Url = u.String()
+		req.Url = strings.TrimSuffix(u.String(), "/")
 	}
 	j.urls[fmt.Sprintf("%s%s", req.Method, req.Url)] = req
 }

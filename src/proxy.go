@@ -6,67 +6,23 @@ import (
 	"compress/flate"
 	"compress/gzip"
 	"crypto/tls"
-	"fmt"
 	"github.com/andybalholm/brotli"
-	socketio "github.com/googollee/go-socket.io"
 	"github.com/sirupsen/logrus"
 	"io"
 	"io/ioutil"
 	"net"
 	"net/http"
 	"net/url"
-	"strings"
-	"sync"
 	"time"
 )
 
 var tunnelEstablishedResponseLine = []byte("HTTP/1.1 200 Connection established\r\n\r\n")
 
 const (
-	maxRecordSize         = 2 * 1024 * 1024 // 2MB
-	HeaderContentLength   = "Content-Length"
-	HeaderContentEncoding = "Content-Encoding"
+	maxRecordSize = 2 * 1024 * 1024 // 2MB
 )
 
 type handleFunc func(w http.ResponseWriter, r *http.Request) error
-
-type proxyManager struct {
-	filter      ScriptFilter
-	certManager *certManager
-
-	tr           http.RoundTripper
-	internalApi  map[string]handleFunc
-	socketServer *socketio.Server
-
-	connectionLock sync.RWMutex
-	connections    map[string]socketio.Conn
-	logChan        chan *RequestLog
-
-	injector Injector
-}
-
-func (pm *proxyManager) setup() {
-	pm.socketServer, _ = socketio.NewServer(nil)
-	pm.socketServer.OnConnect("", pm.onConnect)
-	pm.socketServer.OnEvent("", "ping", pm.onPing)
-	pm.socketServer.OnDisconnect("", pm.onDisconnect)
-	pm.socketServer.OnError("", pm.closeConn)
-	pm.socketServer.OnEvent("", "inject", pm.handleInject)
-
-	pm.logChan = make(chan *RequestLog, 1024)
-	pm.connections = make(map[string]socketio.Conn)
-
-	pm.internalApi = make(map[string]handleFunc)
-	pm.internalApi["/-/cert"] = pm.serveCert
-	pm.internalApi["/-/socket.io"] = pm.websocketHandler
-	pm.internalApi["/-/socket.io/"] = pm.websocketHandler
-	pm.internalApi["/-/"] = pm.serveIndex
-	pm.internalApi["/favicon.ico"] = pm.serveNull
-
-	pm.injector = newJavascriptInjector()
-
-	go pm.startSocketServer()
-}
 
 func (pm *proxyManager) serveCert(w http.ResponseWriter, r *http.Request) error {
 	w.Header().Add("Content-Type", "application/x-x509-ca-cert")
@@ -97,31 +53,6 @@ func (pm *proxyManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-type writer struct {
-	http.ResponseWriter
-	isWrite bool
-}
-
-func (w *writer) WriteHeader(statusCode int) {
-	w.ResponseWriter.WriteHeader(statusCode)
-	w.isWrite = true
-}
-
-func (w *writer) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	return w.ResponseWriter.(http.Hijacker).Hijack()
-}
-
-func (pm *proxyManager) serveError(w http.ResponseWriter, r *http.Request, h handleFunc) {
-	localWriter := &writer{ResponseWriter: w}
-	if err := h(localWriter, r); err != nil {
-		if !localWriter.isWrite {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(fmt.Sprintf("proxy failed: %s", err)))
-		}
-	}
-	return
-}
-
 func (pm *proxyManager) handleHttps(w http.ResponseWriter, r *http.Request) error {
 	conf, err := pm.certManager.GenerateTlsByHost(r.URL.Host)
 	if err != nil {
@@ -129,7 +60,7 @@ func (pm *proxyManager) handleHttps(w http.ResponseWriter, r *http.Request) erro
 	}
 	httpConn, _, err := w.(http.Hijacker).Hijack()
 	if err != nil {
-		return err
+		return nil
 	}
 	_, err = httpConn.Write(tunnelEstablishedResponseLine)
 	if err != nil {
@@ -161,11 +92,6 @@ func (pm *proxyManager) handleHttp(w http.ResponseWriter, r *http.Request) error
 		return err
 	}
 	return pm.handleRequest(httpConn, r)
-}
-
-func (pm *proxyManager) responseError(writer io.Writer, err error) {
-	// TODO:: error page.
-	writer.Write([]byte(fmt.Sprintf("proxy failed: %s", err)))
 }
 
 func (pm *proxyManager) copyResponse(response *http.Response) (*http.Response, bool, error) {
@@ -252,8 +178,16 @@ func (pm *proxyManager) handleRequest(conn net.Conn, r *http.Request) error {
 		CreateTime:     time.Now(),
 		Method:         r.Method,
 	}
+
+	reqBody, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		return err
+	}
+	reqLog.RequestBody = string(reqBody)
+	r.Body = ioutil.NopCloser(bytes.NewReader(reqBody))
+
 	newReq := copyRequest(r)
-	response, err := pm.tr.RoundTrip(newReq)
+	response, err = pm.tr.RoundTrip(newReq)
 	if err != nil {
 		return err
 	}
@@ -275,6 +209,7 @@ func (pm *proxyManager) handleRequest(conn net.Conn, r *http.Request) error {
 		resp.Body = ioutil.NopCloser(bytes.NewBuffer(data))
 		reqLog.ResponseBody = string(data)
 		reqLog.Injected = ok
+		resp.Header.Del("Content-Encoding")
 	}
 
 	resp.Write(conn)
@@ -319,41 +254,10 @@ func copyRequest(req *http.Request) *http.Request {
 	return req2
 }
 
-// getHeader returns lowerCase value.
-func getHeader(h http.Header, key string) string {
-	key = strings.ToLower(key)
-	for k := range h {
-		if strings.ToLower(k) == key {
-			return strings.ToLower(h.Get(k))
-		}
-	}
-	return ""
-}
-
 func copyHeader(h http.Header) http.Header {
 	var newHeader = make(http.Header)
 	for k, v := range h {
 		newHeader[k] = append([]string(nil), v...)
 	}
 	return newHeader
-}
-
-type readCloser struct {
-	buf  *bytes.Buffer
-	body io.ReadCloser
-}
-
-func (r *readCloser) Read(b []byte) (int, error) {
-	if r.buf.Len() != 0 {
-		return r.buf.Read(b)
-	}
-	return r.body.Read(b)
-}
-
-func (r *readCloser) Close() error {
-	return r.body.Close()
-}
-
-func newReadCloser(buf *bytes.Buffer, body io.ReadCloser) io.ReadCloser {
-	return &readCloser{buf: buf, body: body}
 }

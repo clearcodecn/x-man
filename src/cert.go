@@ -10,8 +10,10 @@ import (
 	"github.com/clearcodecn/xman/cert"
 	"github.com/hashicorp/golang-lru"
 	errors "github.com/pkg/errors"
+	"log"
 	"math/big"
 	"net"
+	"os"
 	"time"
 )
 
@@ -38,7 +40,7 @@ func newCertManager(cf CertFrom) (*certManager, error) {
 	ca, key := cf()
 	cm.rootRaw = ca
 	cm.keyRaw = key
-	
+
 	block, _ := pem.Decode(ca)
 	rootCa, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
@@ -74,9 +76,8 @@ func (cm *certManager) GenerateTlsByHost(host string) (*tls.Config, error) {
 		Subject: pkix.Name{
 			Organization: []string{`X-Man`},
 		},
-		NotBefore: time.Now(),
-		NotAfter:  time.Now().AddDate(1, 0, 0),
-
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().AddDate(1, 0, 0),
 		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
@@ -118,4 +119,71 @@ func (cm *certManager) GenerateTlsByHost(host string) (*tls.Config, error) {
 
 func (cm *certManager) RootRaw() []byte {
 	return cm.rootRaw
+}
+
+func (cm certManager) NewCertKey() {
+	var priv interface{}
+	var err error
+	priv, err = rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		log.Fatalf("Failed to generate private key: %v", err)
+	}
+
+	notBefore := time.Now()
+	notAfter := notBefore.Add(365 * 24 * time.Hour)
+
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+	if err != nil {
+		log.Fatalf("Failed to generate serial number: %v", err)
+	}
+
+	template := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			Organization:       []string{"X-Man"},
+			Country:            []string{"CN"},
+			OrganizationalUnit: []string{"X-Man SSL Proxy"},
+			Province:           []string{"SC"},
+			CommonName:         "X-Man",
+		},
+		NotBefore:             notBefore,
+		NotAfter:              notAfter,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+	}
+	template.IsCA = true
+	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, priv.(*rsa.PrivateKey).PublicKey, priv)
+	if err != nil {
+		log.Fatalf("Failed to create certificate: %v", err)
+	}
+
+	certOut, err := os.Create("cert.pem")
+	if err != nil {
+		log.Fatalf("Failed to open cert.pem for writing: %v", err)
+	}
+	if err := pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes}); err != nil {
+		log.Fatalf("Failed to write data to cert.pem: %v", err)
+	}
+	if err := certOut.Close(); err != nil {
+		log.Fatalf("Error closing cert.pem: %v", err)
+	}
+	log.Print("wrote cert.pem\n")
+
+	keyOut, err := os.OpenFile("key.pem", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		log.Fatalf("Failed to open key.pem for writing: %v", err)
+		return
+	}
+	privBytes, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		log.Fatalf("Unable to marshal private key: %v", err)
+	}
+	if err := pem.Encode(keyOut, &pem.Block{Type: "PRIVATE KEY", Bytes: privBytes}); err != nil {
+		log.Fatalf("Failed to write data to key.pem: %v", err)
+	}
+	if err := keyOut.Close(); err != nil {
+		log.Fatalf("Error closing key.pem: %v", err)
+	}
+	log.Print("wrote key.pem\n")
 }

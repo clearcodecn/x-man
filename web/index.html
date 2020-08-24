@@ -77,6 +77,10 @@
     .el-table .inject {
         background: gold;
     }
+
+    .el-table .replay {
+        background: green;
+    }
 </style>
 <div id="app">
     <el-container>
@@ -135,9 +139,10 @@
                         <template slot-scope="scope">
                             <el-button @click.stop @click="injectScript(scope.row)" type="text" size="small">脚本注入
                             </el-button>
-                            <el-button @click.stop @click="reRequest(scope.row)" type="text" size="small">请求重放
+                            <el-button @click.stop @click="replay(scope.row)" type="text" size="small">请求重放
                             </el-button>
-                            <el-button @click="exportJSON(scope.row)" type="text" size="small">导出</el-button>
+                            <el-button @click.stop @click="exportJSON(scope.row)" type="text" size="small">导出
+                            </el-button>
                         </template>
                     </el-table-column>
                 </el-table>
@@ -270,6 +275,9 @@
                     if (raw.request.injected) {
                         return 'inject';
                     }
+                    if (raw.request.replay) {
+                        return "replay";
+                    }
                     if (raw.status >= 200 && raw.status < 400) {
                         return "success-row";
                     } else if (raw.status >= 400 && raw.status < 500) {
@@ -371,14 +379,24 @@
                     this.closeScriptDialog();
                 },
                 // 请求重放.
-                reRequest(row) {
-                    this.socket.emit('reRequest', {
-                        request: row.request,
-                    })
+                replay(row) {
+                    this.socket.emit('replay',row.request)
                 },
                 // 导出json
                 exportJSON(row) {
-
+                    var content = JSON.stringify(row.request);
+                    var timestamp = Date.parse(new Date());
+                    var ele = document.createElement('a');// 创建下载链接
+                    ele.download = timestamp + ".json";//设置下载的名称
+                    ele.style.display = 'none';// 隐藏的可下载链接
+                    // 字符内容转变成blob地址
+                    var blob = new Blob([content]);
+                    ele.href = URL.createObjectURL(blob);
+                    // 绑定点击时间
+                    document.body.appendChild(ele);
+                    ele.click();
+                    // 然后移除
+                    document.body.removeChild(ele);
                 },
             },
             mounted() {
@@ -388,7 +406,6 @@
                 var that = this;
                 this.socket.on("log", function (data) {
                     data = JSON.parse(data)
-                    console.log(data);
                     that.appendRequest(data);
                 })
             },
