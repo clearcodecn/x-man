@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -23,6 +24,13 @@ const (
 )
 
 type handleFunc func(w http.ResponseWriter, r *http.Request) error
+
+func (pm *proxyManager) staticHandler(w http.ResponseWriter, r *http.Request) error {
+	// TODO: optimize
+	r.URL.Path = strings.TrimPrefix(r.URL.Path, "/-/static")
+	http.FileServer(http.Dir("./web/static/")).ServeHTTP(w, r)
+	return nil
+}
 
 func (pm *proxyManager) serveCert(w http.ResponseWriter, r *http.Request) error {
 	w.Header().Add("Content-Type", "application/x-x509-ca-cert")
@@ -42,6 +50,12 @@ func (pm *proxyManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		pm.serveError(w, r, h)
 		return
 	}
+	// static. TODO:: optimize code.
+	if strings.HasPrefix(r.URL.Path, "/-/static") {
+		pm.serveError(w, r, pm.staticHandler)
+		return
+	}
+
 	if pm.isSelf(r) {
 		return
 	}
