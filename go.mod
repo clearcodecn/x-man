@@ -1,4 +1,4 @@
-module github.com/clearcodecn/xman
+module github.com/clearcodecn/x-man
 
 go 1.12
 
